@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.0.21 - 2018-10-08
+
+* Catch multipart upload errors.
+
+## 1.0.20 - 2018-09-25
+
+* Fixed prefix handling for uploads (writes and updates).
+
+## 1.0.19 - 2018-03-27
+
+* Added ETAG to response mapping.
+
+## 1.0.18 - 2017-06-30
+
+### Fixed
+
+* Allow metadata to be returned through the getMetadata method.
+
+## 1.0.17 - 2017-06-30
+
+### Fixed
+
+* Allow passing options to methods that don't accept options.
+
+## 1.0.16 - 2017-06-08
+
+### Improved
+
+* Allow the `Tagging` meta option.
+
 ## 1.0.15 - 2017-04-28
 
 ### Improved

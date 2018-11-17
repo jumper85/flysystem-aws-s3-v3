@@ -4,8 +4,9 @@ namespace League\Flysystem\AwsS3v3\Stub;
 
 use GuzzleHttp\Promise;
 use Aws\Result;
+use GuzzleHttp\Promise\PromiseInterface;
 
-class ResultPaginator
+class ResultPaginator implements \Iterator
 {
     /**
      * @var Result
@@ -20,10 +21,33 @@ class ResultPaginator
     /**
      * @param callable $callback
      *
-     * @return Promise
+     * @return PromiseInterface
      */
     public function each(callable $callback)
     {
         return Promise\promise_for($callback($this->result));
+    }
+
+    public function valid()
+    {
+        return $this->result ? true : false;
+    }
+
+    public function current()
+    {
+        return $this->valid() ? $this->result : false;
+    }
+
+    public function next()
+    {
+        $this->result = null;
+    }
+
+    public function key()
+    {
+    }
+
+    public function rewind()
+    {
     }
 }

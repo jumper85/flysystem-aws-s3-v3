@@ -6,6 +6,7 @@ use Aws\Command;
 use Aws\Result;
 use Aws\S3\Exception\DeleteMultipleObjectsException;
 use Aws\S3\Exception\S3Exception;
+use Aws\S3\Exception\S3MultipartUploadException;
 use GuzzleHttp\Psr7;
 use League\Flysystem\AdapterInterface;
 use League\Flysystem\AwsS3v3\AwsS3Adapter;
@@ -171,7 +172,7 @@ class AwsS3AdapterSpec extends ObjectBehavior
     {
         $key = 'key.txt';
         $result = new Result();
-        $this->client->doesObjectExist($this->bucket, self::PATH_PREFIX.'/'.$key)->willReturn(true);
+        $this->client->doesObjectExist($this->bucket, self::PATH_PREFIX.'/'.$key, [])->willReturn(true);
 
         $this->has($key)->shouldBe(true);
     }
@@ -187,7 +188,7 @@ class AwsS3AdapterSpec extends ObjectBehavior
                 'Key' => 'directory/foo.txt',
             ],
         ]);
-        $this->client->doesObjectExist($this->bucket, self::PATH_PREFIX.'/'.$key)->willReturn(false);
+        $this->client->doesObjectExist($this->bucket, self::PATH_PREFIX.'/'.$key, [])->willReturn(false);
 
         $this->client->getCommand('listObjects', [
             'Bucket' => $this->bucket,
@@ -206,7 +207,7 @@ class AwsS3AdapterSpec extends ObjectBehavior
     public function it_should_return_false_when_listing_objects_returns_a_403($command, $exception)
     {
         $key = 'directory';
-        $this->client->doesObjectExist($this->bucket, self::PATH_PREFIX.'/'.$key)->willReturn(false);
+        $this->client->doesObjectExist($this->bucket, self::PATH_PREFIX.'/'.$key, [])->willReturn(false);
 
         $this->client->getCommand('listObjects', [
             'Bucket' => $this->bucket,
@@ -230,7 +231,7 @@ class AwsS3AdapterSpec extends ObjectBehavior
     public function it_should_pass_through_when_listing_objects_throws_an_exception($command, $exception)
     {
         $key = 'directory';
-        $this->client->doesObjectExist($this->bucket, self::PATH_PREFIX.'/'.$key)->willReturn(false);
+        $this->client->doesObjectExist($this->bucket, self::PATH_PREFIX.'/'.$key, [])->willReturn(false);
 
         $this->client->getCommand('listObjects', [
             'Bucket' => $this->bucket,
@@ -370,7 +371,7 @@ class AwsS3AdapterSpec extends ObjectBehavior
 
     public function it_should_delete_directories()
     {
-        $this->client->deleteMatchingObjects($this->bucket, self::PATH_PREFIX.'/'.'prefix/')->willReturn(null);
+        $this->client->deleteMatchingObjects($this->bucket, self::PATH_PREFIX.'/prefix/')->willReturn(null);
 
         $this->deleteDir('prefix')->shouldBe(true);
     }
@@ -456,6 +457,63 @@ class AwsS3AdapterSpec extends ObjectBehavior
         $this->setVisibility($key, 'private')->shouldBe(false);
     }
 
+    /**
+     * @param \Aws\CommandInterface $command
+     */
+    public function it_should_return_false_when_failing_to_upload()
+    {
+        $config = new Config(['visibility' => 'public', 'mimetype' => 'plain/text', 'CacheControl' => 'value']);
+        $key = 'key.txt';
+        $this->client->upload(
+            $this->bucket,
+            self::PATH_PREFIX.'/'.$key,
+            'contents',
+            'public-read',
+            Argument::type('array')
+        )->willThrow(S3MultipartUploadException::class);
+
+
+        $this->write($key, 'contents', $config)->shouldBe(false);
+    }
+
+    /**
+     * @param \Aws\CommandInterface $command
+     */
+    public function it_should_return_path_in_response_without_prefix($command)
+    {
+        $key = 'key.txt';
+        $dir = 'dir';
+
+        $this->writeStream($key, '', new Config())->shouldHaveKeyWithValue('path', $key);
+        $this->updateStream($key, '', new Config())->shouldHaveKeyWithValue('path', $key);
+        $this->write($key, '', new Config())->shouldHaveKeyWithValue('path', $key);
+        $this->update($key, '', new Config())->shouldHaveKeyWithValue('path', $key);
+        $this->createDir($dir, new Config())->shouldHaveKeyWithValue('path', $dir);
+
+        $this->make_it_retrieve_file_metadata('getMetadata', $command);
+        $this->getMetadata($key)->shouldHaveKeyWithValue('path', $key);
+
+        $resource = tmpfile();
+        $this->make_it_read_a_file($command, 'readStream', $resource);
+        fclose($resource);
+        $this->readStream($key)->shouldHaveKeyWithValue('path', $key);
+
+        $this->make_it_read_a_file($command, 'read', '');
+        $this->read($key)->shouldHaveKeyWithValue('path', $key);
+
+        $this->client->getPaginator('ListObjects', [
+            'Bucket' => $this->bucket,
+            'Prefix' => self::PATH_PREFIX.'/'.$dir.'/',
+            'Delimiter' => '/'
+        ])->shouldBeCalled()->willReturn(new ResultPaginator(new Result([
+            'Contents' => [
+                ['Key' => self::PATH_PREFIX . '/' . $dir . '/' . $key],
+            ]
+        ])));
+
+        $this->listContents($dir)->shouldHaveItemWithKeyWithValue('path', $dir . '/' . $key);
+    }
+
     private function make_it_retrieve_raw_visibility($command, $key, $visibility)
     {
         $options = [
@@ -489,6 +547,7 @@ class AwsS3AdapterSpec extends ObjectBehavior
             'Key' => self::PATH_PREFIX.'/'.$key,
             'LastModified' => date('Y-m-d H:i:s', $timestamp),
             'ContentType' => 'plain/text',
+            'ETag' => '1234612346',
         ]);
 
         $this->client->getCommand('headObject', [
@@ -605,12 +664,21 @@ class AwsS3AdapterSpec extends ObjectBehavior
             'haveValue' => function ($subject, $value) {
                 return in_array($value, $subject);
             },
+            'haveItemWithKeyWithValue' => function($subject, $key, $value) {
+                foreach ($subject as $item) {
+                    if (isset($item[$key]) && $item[$key] === $value) {
+                        return true;
+                    }
+                }
+
+                return false;
+            },
         ];
     }
 
     private function make_it_404_on_has_object($headCommand, $listCommand, $key)
     {
-        $this->client->doesObjectExist($this->bucket, self::PATH_PREFIX.'/'.$key)->willReturn(false);
+        $this->client->doesObjectExist($this->bucket, self::PATH_PREFIX.'/'.$key, [])->willReturn(false);
 
         $result = new Result();
         $this->client->getCommand('listObjects', [
